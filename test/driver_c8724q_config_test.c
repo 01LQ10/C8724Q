@@ -4,7 +4,7 @@
  *
  * @file      driver_c8724q_config_test.c
  * @brief     driver c8724q configuration test source file
- * @version   1.0.0
+ * @version   1.1.0
  * @author    LQ
  * @date      2026-10-05
  *
@@ -12,6 +12,7 @@
  * <table>
  * <tr><th>Date        <th>Version  <th>Author  <th>Description
  * <tr><td>2026/10/05  <td>1.0.0    <td>LQ      <td>first upload
+ * <tr><td>2026/10/05  <td>1.1.0    <td>LQ      <td>config flow moved to field macros and one set_config
  * </table>
  */
 
@@ -91,7 +92,7 @@ static void a_c8724q_config_test_debug_print(const char *const fmt, ...)
 }
 
 /**
- * @brief      check staged configuration values and packet encoding
+ * @brief      check configuration macros, shadow update and packet encoding
  * @return     status code
  *             - 0 success
  *             - 1 test failed
@@ -100,16 +101,8 @@ static void a_c8724q_config_test_debug_print(const char *const fmt, ...)
 uint8_t c8724q_config_test(void)
 {
     c8724q_handle_t handle;
-    c8724q_seg_pin_mode_t seg_mode;
-    c8724q_clock_source_t clock_source;
-    c8724q_scan_t scan;
-    c8724q_protection_t protection;
-    c8724q_internal_clock_t internal_clock;
-    c8724q_line_blanking_t line_blanking;
-    c8724q_update_mode_t update_mode;
-    c8724q_bool_t bool_value;
-    uint8_t pending[4];
-    uint8_t applied[4];
+    uint8_t config[4];
+    uint8_t shadow[4];
     uint8_t res;
     uint32_t write_count;
 
@@ -123,7 +116,7 @@ uint8_t c8724q_config_test(void)
     handle.spi_write_cmd = a_c8724q_config_test_spi_write;
     handle.debug_print = a_c8724q_config_test_debug_print;
 
-    /* initialize chip and verify datasheet reset defaults */
+    /* initialize chip and verify the broadcast global reset packet */
     res = c8724q_init(&handle);
     if ((res != 0U) || (gs_packet_len != 4U) || (gs_packet[0] != 0x5AU) ||
         (gs_packet[1] != 0xFFU) || (gs_packet[2] != 0x8BU) || (gs_packet[3] != 0xE4U))
@@ -131,126 +124,73 @@ uint8_t c8724q_config_test(void)
         return 1U;
     }
 
-    /* stage all documented configuration fields without bus activity */
+    /* the reset configuration must match the datasheet defaults */
+    if ((c8724q_get_config(&handle, config) != 0U) ||
+        (config[0] != 0x3FU) || (config[1] != 0x00U) ||
+        (config[2] != 0xF0U) || (config[3] != 0x02U))
+    {
+        (void)c8724q_deinit(&handle);
+        return 1U;
+    }
+
+    /* field macros edit a local copy without any bus activity */
     write_count = gs_write_count;
-    res = c8724q_set_seg11_mode(&handle, C8724Q_SEG_PIN_LED_OUTPUT);
-    if (res == 0U)
-    {
-        res = c8724q_set_seg12_mode(&handle, C8724Q_SEG_PIN_LED_OUTPUT);
-    }
-    if (res == 0U)
-    {
-        res = c8724q_set_global_current_gain(&handle, 0U);
-    }
-    if (res == 0U)
-    {
-        res = c8724q_set_clock_source(&handle, C8724Q_CLOCK_SOURCE_INTERNAL);
-    }
-    if (res == 0U)
-    {
-        res = c8724q_set_scan(&handle, C8724Q_SCAN_8_ROWS);
-    }
-    if (res == 0U)
-    {
-        res = c8724q_set_test_mode(&handle, C8724Q_BOOL_FALSE);
-    }
-    if (res == 0U)
-    {
-        res = c8724q_set_update_mode(&handle, C8724Q_UPDATE_MODE_FORCE);
-    }
-    if (res == 0U)
-    {
-        res = c8724q_set_otp1_protection(&handle, C8724Q_PROTECTION_DISABLED);
-    }
-    if (res == 0U)
-    {
-        res = c8724q_set_rcs_bit(&handle, 1U);
-    }
-    if (res == 0U)
-    {
-        res = c8724q_set_internal_clock(&handle, C8724Q_INTERNAL_CLOCK_8_MHZ);
-    }
-    if (res == 0U)
-    {
-        res = c8724q_set_output_enable(&handle, C8724Q_BOOL_TRUE);
-    }
-    if (res == 0U)
-    {
-        res = c8724q_set_ghost_removal(&handle, C8724Q_GHOST_REMOVAL_WEAK);
-    }
-    if (res == 0U)
-    {
-        res = c8724q_set_line_blanking(&handle, C8724Q_LINE_BLANKING_4T);
-    }
-    if (res == 0U)
-    {
-        res = c8724q_set_sleep_enable(&handle, C8724Q_BOOL_FALSE);
-    }
-    if (res == 0U)
-    {
-        res = c8724q_set_auto_sleep_enable(&handle, C8724Q_BOOL_FALSE);
-    }
-    if (res == 0U)
-    {
-        res = c8724q_set_global_reset_enable(&handle, C8724Q_BOOL_FALSE);
-    }
-    if (res == 0U)
-    {
-        res = c8724q_set_soft_reset_enable(&handle, C8724Q_BOOL_FALSE);
-    }
-    if (res == 0U)
-    {
-        res = c8724q_set_scan_clock_double_enable(&handle, C8724Q_BOOL_FALSE);
-    }
-    if (res == 0U)
-    {
-        res = c8724q_set_otp2_protection(&handle, C8724Q_PROTECTION_DISABLED);
-    }
-    if (res == 0U)
-    {
-        res = c8724q_set_power_down_reset_enable(&handle, C8724Q_BOOL_FALSE);
-    }
-    if ((res != 0U) || (gs_write_count != write_count))
+    C8724Q_SET_SEG11_MODE(config, C8724Q_SEG_PIN_LED_OUTPUT);
+    C8724Q_SET_SEG12_MODE(config, C8724Q_SEG_PIN_LED_OUTPUT);
+    C8724Q_SET_GLOBAL_CURRENT_GAIN(config, 0U);
+    C8724Q_SET_CLOCK_SOURCE(config, C8724Q_CLOCK_SOURCE_INTERNAL);
+    C8724Q_SET_SCAN(config, C8724Q_SCAN_8_ROWS);
+    C8724Q_SET_TEST_MODE(config, C8724Q_BOOL_FALSE);
+    C8724Q_SET_UPDATE_MODE(config, C8724Q_UPDATE_MODE_FORCE);
+    C8724Q_SET_OTP1_ENABLE(config, C8724Q_BOOL_FALSE);
+    C8724Q_SET_RCS_EXTERNAL(config, C8724Q_BOOL_TRUE);
+    C8724Q_SET_INTERNAL_CLOCK(config, C8724Q_INTERNAL_CLOCK_8_MHZ);
+    C8724Q_SET_OUTPUT_ENABLE(config, C8724Q_BOOL_TRUE);
+    C8724Q_SET_GHOST_REMOVAL(config, C8724Q_GHOST_REMOVAL_WEAK);
+    C8724Q_SET_LINE_BLANKING(config, C8724Q_LINE_BLANKING_4T);
+    C8724Q_SET_SLEEP_ENABLE(config, C8724Q_BOOL_FALSE);
+    C8724Q_SET_AUTO_SLEEP_ENABLE(config, C8724Q_BOOL_FALSE);
+    C8724Q_SET_GLOBAL_RESET_ENABLE(config, C8724Q_BOOL_FALSE);
+    C8724Q_SET_SOFT_RESET_ENABLE(config, C8724Q_BOOL_FALSE);
+    C8724Q_SET_SCAN_CLOCK_DOUBLE(config, C8724Q_BOOL_FALSE);
+    C8724Q_SET_OTP2_ENABLE(config, C8724Q_BOOL_FALSE);
+    C8724Q_SET_POWER_DOWN_RESET(config, C8724Q_BOOL_FALSE);
+    if ((config[0] != 0xC0U) || (config[1] != 0x1CU) ||
+        (config[2] != 0xF8U) || (config[3] != 0x02U) ||
+        (gs_write_count != write_count))
     {
         (void)c8724q_deinit(&handle);
         return 1U;
     }
 
-    /* verify typed getters report the pending field values */
-    if ((c8724q_get_seg11_mode(&handle, &seg_mode) != 0U) ||
-        (seg_mode != C8724Q_SEG_PIN_LED_OUTPUT) ||
-        (c8724q_get_clock_source(&handle, &clock_source) != 0U) ||
-        (clock_source != C8724Q_CLOCK_SOURCE_INTERNAL) ||
-        (c8724q_get_scan(&handle, &scan) != 0U) || (scan != C8724Q_SCAN_8_ROWS) ||
-        (c8724q_get_otp1_protection(&handle, &protection) != 0U) ||
-        (protection != C8724Q_PROTECTION_DISABLED) ||
-        (c8724q_get_internal_clock(&handle, &internal_clock) != 0U) ||
-        (internal_clock != C8724Q_INTERNAL_CLOCK_8_MHZ) ||
-        (c8724q_get_line_blanking(&handle, &line_blanking) != 0U) ||
-        (line_blanking != C8724Q_LINE_BLANKING_4T) ||
-        (c8724q_get_update_mode(&handle, &update_mode) != 0U) ||
-        (update_mode != C8724Q_UPDATE_MODE_FORCE) ||
-        (c8724q_get_output_enable(&handle, &bool_value) != 0U) ||
-        (bool_value != C8724Q_BOOL_TRUE))
+    /* typed getters must read every field back from the same array */
+    if ((C8724Q_GET_SEG11_MODE(config) != C8724Q_SEG_PIN_LED_OUTPUT) ||
+        (C8724Q_GET_SEG12_MODE(config) != C8724Q_SEG_PIN_LED_OUTPUT) ||
+        (C8724Q_GET_GLOBAL_CURRENT_GAIN(config) != 0U) ||
+        (C8724Q_GET_CLOCK_SOURCE(config) != C8724Q_CLOCK_SOURCE_INTERNAL) ||
+        (C8724Q_GET_SCAN(config) != C8724Q_SCAN_8_ROWS) ||
+        (C8724Q_GET_TEST_MODE(config) != C8724Q_BOOL_FALSE) ||
+        (C8724Q_GET_UPDATE_MODE(config) != C8724Q_UPDATE_MODE_FORCE) ||
+        (C8724Q_GET_OTP1_ENABLE(config) != C8724Q_BOOL_FALSE) ||
+        (C8724Q_GET_RCS_EXTERNAL(config) != C8724Q_BOOL_TRUE) ||
+        (C8724Q_GET_INTERNAL_CLOCK(config) != C8724Q_INTERNAL_CLOCK_8_MHZ) ||
+        (C8724Q_GET_OUTPUT_ENABLE(config) != C8724Q_BOOL_TRUE) ||
+        (C8724Q_GET_GHOST_REMOVAL(config) != C8724Q_GHOST_REMOVAL_WEAK) ||
+        (C8724Q_GET_LINE_BLANKING(config) != C8724Q_LINE_BLANKING_4T) ||
+        (C8724Q_GET_SLEEP_ENABLE(config) != C8724Q_BOOL_FALSE) ||
+        (C8724Q_GET_AUTO_SLEEP_ENABLE(config) != C8724Q_BOOL_FALSE) ||
+        (C8724Q_GET_GLOBAL_RESET_ENABLE(config) != C8724Q_BOOL_FALSE) ||
+        (C8724Q_GET_SOFT_RESET_ENABLE(config) != C8724Q_BOOL_FALSE) ||
+        (C8724Q_GET_SCAN_CLOCK_DOUBLE(config) != C8724Q_BOOL_FALSE) ||
+        (C8724Q_GET_OTP2_ENABLE(config) != C8724Q_BOOL_FALSE) ||
+        (C8724Q_GET_POWER_DOWN_RESET(config) != C8724Q_BOOL_FALSE))
     {
         (void)c8724q_deinit(&handle);
         return 1U;
     }
 
-    /* compare staged and applied snapshots before commit */
-    if ((c8724q_get_config(&handle, pending) != 0U) ||
-        (c8724q_get_applied_config(&handle, applied) != 0U) ||
-        (pending[0] != 0xC0U) || (pending[1] != 0x1CU) ||
-        (pending[2] != 0xF8U) || (pending[3] != 0x02U) ||
-        (applied[0] != 0x3FU) || (applied[1] != 0x00U) ||
-        (applied[2] != 0xF0U) || (applied[3] != 0x02U))
-    {
-        (void)c8724q_deinit(&handle);
-        return 1U;
-    }
-
-    /* apply all four bytes in one checksummed SPI transaction */
-    res = c8724q_apply_config(&handle);
+    /* one set_config sends the whole packet and refreshes the shadow */
+    res = c8724q_set_config(&handle, config);
     if (res != 0U)
     {
         (void)c8724q_deinit(&handle);
@@ -261,42 +201,46 @@ uint8_t c8724q_config_test(void)
                                        0xC0U, 0x1CU, 0xF8U, 0x02U, 0xD6U };
         if ((gs_packet_len != sizeof(expected)) ||
             (memcmp(gs_packet, expected, sizeof(expected)) != 0) ||
-            (handle.config_dirty != 0U))
+            (c8724q_get_config(&handle, shadow) != 0U) ||
+            (memcmp(shadow, &expected[4], 4U) != 0))
         {
             (void)c8724q_deinit(&handle);
             return 1U;
         }
     }
 
-    /* reject invalid enum, reserved register bits, and out-of-range raw fields */
-    write_count = gs_write_count;
-    if ((c8724q_set_scan(&handle, (c8724q_scan_t)8U) != 4U) ||
-        (c8724q_set_rcs_bit(&handle, 2U) != 4U) ||
-        (c8724q_set_config_reg2(&handle, 0x20U) != 4U) ||
-        (c8724q_set_config_reg4(&handle, 0x80U) != 4U) ||
-        (gs_write_count != write_count))
+    /* reserved bits are rejected and the shadow stays untouched */
+    config[1] = 0x20U;
+    res = c8724q_set_config(&handle, config);
+    if ((res != 4U) || (c8724q_get_config(&handle, shadow) != 0U) ||
+        (shadow[1] != 0x1CU))
     {
         (void)c8724q_deinit(&handle);
         return 1U;
     }
+    config[1] = 0x1CU;
+    config[3] = 0x82U;
+    res = c8724q_set_config(&handle, config);
+    if ((res != 4U) || (c8724q_get_config(&handle, shadow) != 0U) ||
+        (shadow[3] != 0x02U))
+    {
+        (void)c8724q_deinit(&handle);
+        return 1U;
+    }
+    config[3] = 0x02U;
 
-    /* retain staged data and applied snapshot after a failed apply, then retry */
-    if (c8724q_set_global_current_gain(&handle, 5U) != 0U)
-    {
-        (void)c8724q_deinit(&handle);
-        return 1U;
-    }
+    /* a failed SPI write keeps the previous shadow, a retry succeeds */
+    C8724Q_SET_GLOBAL_CURRENT_GAIN(config, 5U);
     gs_write_fail = 1U;
-    res = c8724q_apply_config(&handle);
+    res = c8724q_set_config(&handle, config);
     gs_write_fail = 0U;
-    if ((res != 1U) || (c8724q_get_config(&handle, pending) != 0U) ||
-        (c8724q_get_applied_config(&handle, applied) != 0U) ||
-        (pending[0] != 0xC5U) || (applied[0] != 0xC0U) || (handle.config_dirty == 0U))
+    if ((res != 1U) || (c8724q_get_config(&handle, shadow) != 0U) ||
+        (shadow[0] != 0xC0U))
     {
         (void)c8724q_deinit(&handle);
         return 1U;
     }
-    if (c8724q_apply_config(&handle) != 0U)
+    if (c8724q_set_config(&handle, config) != 0U)
     {
         (void)c8724q_deinit(&handle);
         return 1U;
@@ -306,14 +250,15 @@ uint8_t c8724q_config_test(void)
                                        0xC5U, 0x1CU, 0xF8U, 0x02U, 0xDBU };
         if ((gs_packet_len != sizeof(expected)) ||
             (memcmp(gs_packet, expected, sizeof(expected)) != 0) ||
-            (handle.config_dirty != 0U))
+            (c8724q_get_config(&handle, shadow) != 0U) ||
+            (memcmp(shadow, &expected[4], 4U) != 0))
         {
             (void)c8724q_deinit(&handle);
             return 1U;
         }
     }
 
-    /* finish the mock session */
+    /* finish the mock session: clear, sleep enable, sleep and bus close */
     res = c8724q_deinit(&handle);
     if (res != 0U)
     {

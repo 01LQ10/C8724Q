@@ -4,7 +4,7 @@
  *
  * @file      driver_c8724q.h
  * @brief     driver c8724q header file
- * @version   1.0.0
+ * @version   1.1.0
  * @author    LQ
  * @date      2026-10-05
  *
@@ -12,6 +12,7 @@
  * <table>
  * <tr><th>Date        <th>Version  <th>Author  <th>Description
  * <tr><td>2026/10/05  <td>1.0.0    <td>LQ      <td>first upload
+ * <tr><td>2026/10/05  <td>1.1.0    <td>LQ      <td>config API reduced to set/get plus field macros, frame buffer added
  * </table>
  */
 
@@ -35,7 +36,7 @@ extern "C" {
 #define C8724Q_DISPLAY_HEIGHT                        8U  /**< number of GRID channels */
 #define C8724Q_DISPLAY_DATA_MAX                      96U /**< maximum sequential PWM data bytes */
 #define C8724Q_ADDRESS_DATA_MAX                      72U /**< maximum addressed PWM data entries */
-#define C8724Q_DRIVER_VERSION                        1000U /**< driver version 1.0.0 */
+#define C8724Q_DRIVER_VERSION                        1100U /**< driver version 1.1.0 */
 
 #define C8724Q_REG1_SEG12_CS_MASK                    0x80U /**< SEG12 function bit mask */
 #define C8724Q_REG1_SEG11_CS_MASK                    0x40U /**< SEG11 function bit mask */
@@ -121,15 +122,6 @@ typedef enum
 } c8724q_update_mode_t;
 
 /**
- * @brief c8724q overtemperature protection enumeration definition
- */
-typedef enum
-{
-    C8724Q_PROTECTION_ENABLED = 0x00, /**< enable the corresponding protection */
-    C8724Q_PROTECTION_DISABLED = 0x01 /**< disable the corresponding protection */
-} c8724q_protection_t;
-
-/**
  * @brief c8724q internal clock frequency enumeration definition
  */
 typedef enum
@@ -185,9 +177,8 @@ typedef struct c8724q_handle_s
     uint8_t (*spi_deinit)(void); /**< point to a spi_deinit function address */
     uint8_t (*spi_write_cmd)(const uint8_t *buf, uint16_t len); /**< point to a spi_write_cmd function address */
     void (*debug_print)(const char *const fmt, ...); /**< point to a debug_print function address */
-    uint8_t config[4]; /**< pending configuration registers 1 through 4 */
-    uint8_t applied_config[4]; /**< last successfully applied configuration registers */
-    uint8_t config_dirty; /**< pending configuration differs from applied configuration */
+    uint8_t config[4]; /**< configuration registers mirroring the chip */
+    uint8_t frame[C8724Q_DISPLAY_DATA_MAX]; /**< pending display frame in GRID-major order */
     uint8_t address; /**< instruction chip select address */
     uint8_t broadcast; /**< broadcast instruction selection */
     uint8_t inited; /**< initialized flag */
@@ -231,7 +222,8 @@ uint8_t c8724q_info(c8724q_info_t *info);
  *             - 1 SPI operation failed
  *             - 2 handle is invalid
  *             - 3 required function is null or chip is already initialized
- * @note       sends a broadcast global reset after SPI initialization
+ * @note       sends a broadcast global reset after SPI initialization and loads
+ *             the datasheet reset defaults into the shadow configuration
  */
 uint8_t c8724q_init(c8724q_handle_t *handle);
 
@@ -243,7 +235,8 @@ uint8_t c8724q_init(c8724q_handle_t *handle);
  *             - 1 SPI operation failed
  *             - 2 handle is invalid
  *             - 3 chip is not initialized
- * @note       clears the active frame, sends sleep, then deinitializes SPI
+ * @note       clears the active frame, enables sleep in the configuration,
+ *             sends the sleep instruction, then deinitializes SPI
  */
 uint8_t c8724q_deinit(c8724q_handle_t *handle);
 
@@ -308,46 +301,24 @@ uint8_t c8724q_get_broadcast(c8724q_handle_t *handle, c8724q_bool_t *enable);
  */
 
 /**
- * @brief      stage all four configuration registers
+ * @brief      send the four configuration registers to the chip
  * @param[in]  *handle pointer to a c8724q handle
- * @param[in]  *config pointer to four configuration bytes
- * @return     status code
- *             - 0 success
- *             - 2 handle is invalid
- *             - 3 chip is not initialized
- *             - 4 config is invalid or contains reserved bits
- * @note       stages the bytes only; call c8724q_apply_config to transmit them
- */
-uint8_t c8724q_set_config(c8724q_handle_t *handle, const uint8_t config[4]);
-
-/**
- * @brief      get the four pending configuration register values
- * @param[in]  *handle pointer to a c8724q handle
- * @param[out] *config pointer to a four-byte output buffer
- * @return     status code
- *             - 0 success
- *             - 2 handle is invalid
- *             - 3 chip is not initialized
- *             - 4 config is null
- * @note       returns staged values, not hardware readback
- */
-uint8_t c8724q_get_config(c8724q_handle_t *handle, uint8_t config[4]);
-
-/**
- * @brief      apply pending configuration registers
- * @param[in]  *handle pointer to a c8724q handle
+ * @param[in]  *config pointer to four configuration bytes, edit a copy from
+ *             c8724q_get_config with the C8724Q_SET_xxx macros
  * @return     status code
  *             - 0 success
  *             - 1 SPI operation failed
  *             - 2 handle is invalid
  *             - 3 chip is not initialized
- *             - 4 pending configuration is invalid
- * @note       sends all four configuration bytes and their checksum
+ *             - 4 config is null or contains reserved bits
+ * @note       transmits all four registers and their checksum in one packet and
+ *             updates the shadow configuration on success; on SPI failure the
+ *             shadow configuration is left untouched
  */
-uint8_t c8724q_apply_config(c8724q_handle_t *handle);
+uint8_t c8724q_set_config(c8724q_handle_t *handle, const uint8_t config[4]);
 
 /**
- * @brief      get the last successfully applied configuration
+ * @brief      copy the current configuration registers
  * @param[in]  *handle pointer to a c8724q handle
  * @param[out] *config pointer to a four-byte output buffer
  * @return     status code
@@ -355,311 +326,264 @@ uint8_t c8724q_apply_config(c8724q_handle_t *handle);
  *             - 2 handle is invalid
  *             - 3 chip is not initialized
  *             - 4 config is null
- * @note       returns the software snapshot of the last successful apply
+ * @note       returns the shadow configuration; the chip has no register
+ *             readback, and because every c8724q_set_config transmits at once,
+ *             the shadow equals the last successfully applied value
  */
-uint8_t c8724q_get_applied_config(c8724q_handle_t *handle, uint8_t config[4]);
+uint8_t c8724q_get_config(c8724q_handle_t *handle, uint8_t config[4]);
 
 /**
- * @brief      set configuration register 1 raw value
- * @param[in]  *handle pointer to a c8724q handle
- * @param[in]  value configuration register 1 value
- * @return     status code
- *             - 0 success
- *             - 2 handle is invalid
- *             - 3 chip is not initialized
- * @note       low-level staging API; use feature setters where possible
+ * @brief      configuration field read-modify-write macro
+ * @param[in]  cfg uint8_t[4] configuration array
+ * @param[in]  index register index, 0 through 3
+ * @param[in]  mask field bit mask
+ * @param[in]  shift field bit shift
+ * @param[in]  value encoded field value, masked to the field width
+ * @note       builds C8724Q_SET_xxx macros; cfg is evaluated more than once
  */
-uint8_t c8724q_set_config_reg1(c8724q_handle_t *handle, uint8_t value);
+#define C8724Q_CFG_FIELD_SET(cfg, index, mask, shift, value)          \
+    do {                                                              \
+        (cfg)[(index)] = (uint8_t)(((cfg)[(index)] &                  \
+                                    (uint8_t)(~(uint8_t)(mask))) |    \
+                                   (((uint8_t)(value) << (shift)) &   \
+                                    (uint8_t)(mask)));                \
+    } while (0)
 
 /**
- * @brief      get configuration register 1 shadow value
- * @param[in]  *handle pointer to a c8724q handle
- * @param[out] *value pointer to the output value
- * @return     status code
- *             - 0 success
- *             - 2 handle is invalid
- *             - 3 chip is not initialized
- *             - 4 value is null
- * @note       returns the pending software value
+ * @brief      configuration field extraction macro
+ * @param[in]  cfg uint8_t[4] configuration array
+ * @param[in]  index register index, 0 through 3
+ * @param[in]  mask field bit mask
+ * @param[in]  shift field bit shift
+ * @param[in]  type output type of the extraction
+ * @note       builds C8724Q_GET_xxx macros; cfg is evaluated more than once
  */
-uint8_t c8724q_get_config_reg1(c8724q_handle_t *handle, uint8_t *value);
+#define C8724Q_CFG_FIELD_GET(cfg, index, mask, shift, type)           \
+    ((type)((((cfg)[(index)]) & (uint8_t)(mask)) >> (shift)))
 
 /**
- * @brief      set configuration register 2 raw value
- * @param[in]  *handle pointer to a c8724q handle
- * @param[in]  value configuration register 2 value
- * @return     status code
- *             - 0 success
- *             - 2 handle is invalid
- *             - 3 chip is not initialized
- *             - 4 reserved bits are set
- * @note       low-level staging API; bits 6 and 5 must be zero
+ * @brief      set and get the SEG12 pin function in a configuration array
+ * @param[in]  cfg uint8_t[4] configuration array
+ * @param[in]  value c8724q_seg_pin_mode_t value
+ * @note       no range check; call c8724q_set_config to transmit
  */
-uint8_t c8724q_set_config_reg2(c8724q_handle_t *handle, uint8_t value);
+#define C8724Q_SET_SEG12_MODE(cfg, value) \
+    C8724Q_CFG_FIELD_SET(cfg, 0, C8724Q_REG1_SEG12_CS_MASK, 7, value)
+#define C8724Q_GET_SEG12_MODE(cfg) \
+    C8724Q_CFG_FIELD_GET(cfg, 0, C8724Q_REG1_SEG12_CS_MASK, 7, c8724q_seg_pin_mode_t)
 
 /**
- * @brief      get configuration register 2 shadow value
- * @param[in]  *handle pointer to a c8724q handle
- * @param[out] *value pointer to the output value
- * @return     status code
- *             - 0 success
- *             - 2 handle is invalid
- *             - 3 chip is not initialized
- *             - 4 value is null
- * @note       returns the pending software value
+ * @brief      set and get the SEG11 pin function in a configuration array
+ * @param[in]  cfg uint8_t[4] configuration array
+ * @param[in]  value c8724q_seg_pin_mode_t value
+ * @note       no range check; call c8724q_set_config to transmit
  */
-uint8_t c8724q_get_config_reg2(c8724q_handle_t *handle, uint8_t *value);
+#define C8724Q_SET_SEG11_MODE(cfg, value) \
+    C8724Q_CFG_FIELD_SET(cfg, 0, C8724Q_REG1_SEG11_CS_MASK, 6, value)
+#define C8724Q_GET_SEG11_MODE(cfg) \
+    C8724Q_CFG_FIELD_GET(cfg, 0, C8724Q_REG1_SEG11_CS_MASK, 6, c8724q_seg_pin_mode_t)
 
 /**
- * @brief      set configuration register 3 raw value
- * @param[in]  *handle pointer to a c8724q handle
- * @param[in]  value configuration register 3 value
- * @return     status code
- *             - 0 success
- *             - 2 handle is invalid
- *             - 3 chip is not initialized
- * @note       low-level staging API; RCS=0 is documented, RCS=1 behavior is unspecified
- */
-uint8_t c8724q_set_config_reg3(c8724q_handle_t *handle, uint8_t value);
-
-/**
- * @brief      get configuration register 3 shadow value
- * @param[in]  *handle pointer to a c8724q handle
- * @param[out] *value pointer to the output value
- * @return     status code
- *             - 0 success
- *             - 2 handle is invalid
- *             - 3 chip is not initialized
- *             - 4 value is null
- * @note       returns the pending software value
- */
-uint8_t c8724q_get_config_reg3(c8724q_handle_t *handle, uint8_t *value);
-
-/**
- * @brief      set configuration register 4 raw value
- * @param[in]  *handle pointer to a c8724q handle
- * @param[in]  value configuration register 4 value
- * @return     status code
- *             - 0 success
- *             - 2 handle is invalid
- *             - 3 chip is not initialized
- *             - 4 reserved bit is set
- * @note       low-level staging API; bit 7 must be zero
- */
-uint8_t c8724q_set_config_reg4(c8724q_handle_t *handle, uint8_t value);
-
-/**
- * @brief      get configuration register 4 shadow value
- * @param[in]  *handle pointer to a c8724q handle
- * @param[out] *value pointer to the output value
- * @return     status code
- *             - 0 success
- *             - 2 handle is invalid
- *             - 3 chip is not initialized
- *             - 4 value is null
- * @note       returns the pending software value
- */
-uint8_t c8724q_get_config_reg4(c8724q_handle_t *handle, uint8_t *value);
-
-/**
- * @brief      stage and get SEG11 pin function
- * @param[in]  *handle pointer to a c8724q handle
- * @param[in]  value SEG11 pin function
- * @return     setter: 0 success, 2 invalid handle, 3 not initialized, 4 invalid value
- * @note       getter returns pending state; call c8724q_apply_config to commit
- */
-uint8_t c8724q_set_seg11_mode(c8724q_handle_t *handle, c8724q_seg_pin_mode_t value);
-uint8_t c8724q_get_seg11_mode(c8724q_handle_t *handle, c8724q_seg_pin_mode_t *value);
-
-/**
- * @brief      stage and get SEG12 pin function
- * @param[in]  *handle pointer to a c8724q handle
- * @param[in]  value SEG12 pin function
- * @return     setter: 0 success, 2 invalid handle, 3 not initialized, 4 invalid value
- * @note       getter returns pending state; call c8724q_apply_config to commit
- */
-uint8_t c8724q_set_seg12_mode(c8724q_handle_t *handle, c8724q_seg_pin_mode_t value);
-uint8_t c8724q_get_seg12_mode(c8724q_handle_t *handle, c8724q_seg_pin_mode_t *value);
-
-/**
- * @brief      stage and get global current gain
- * @param[in]  *handle pointer to a c8724q handle
+ * @brief      set and get the global current gain in a configuration array
+ * @param[in]  cfg uint8_t[4] configuration array
  * @param[in]  value GCC value from 0 through 63
- * @return     setter: 0 success, 2 invalid handle, 3 not initialized, 4 out of range
- * @note       getter returns pending state; call c8724q_apply_config to commit
+ * @note       no range check; call c8724q_set_config to transmit
  */
-uint8_t c8724q_set_global_current_gain(c8724q_handle_t *handle, uint8_t value);
-uint8_t c8724q_get_global_current_gain(c8724q_handle_t *handle, uint8_t *value);
+#define C8724Q_SET_GLOBAL_CURRENT_GAIN(cfg, value) \
+    C8724Q_CFG_FIELD_SET(cfg, 0, C8724Q_REG1_GCC_MASK, 0, value)
+#define C8724Q_GET_GLOBAL_CURRENT_GAIN(cfg) \
+    C8724Q_CFG_FIELD_GET(cfg, 0, C8724Q_REG1_GCC_MASK, 0, uint8_t)
 
 /**
- * @brief      stage and get clock source
- * @param[in]  *handle pointer to a c8724q handle
- * @param[in]  value clock source selection
- * @return     setter: 0 success, 2 invalid handle, 3 not initialized, 4 invalid value
- * @note       getter returns pending state; call c8724q_apply_config to commit
+ * @brief      set and get the clock source in a configuration array
+ * @param[in]  cfg uint8_t[4] configuration array
+ * @param[in]  value c8724q_clock_source_t value
+ * @note       no range check; call c8724q_set_config to transmit
  */
-uint8_t c8724q_set_clock_source(c8724q_handle_t *handle, c8724q_clock_source_t value);
-uint8_t c8724q_get_clock_source(c8724q_handle_t *handle, c8724q_clock_source_t *value);
+#define C8724Q_SET_CLOCK_SOURCE(cfg, value) \
+    C8724Q_CFG_FIELD_SET(cfg, 1, C8724Q_REG2_CKS_MASK, 7, value)
+#define C8724Q_GET_CLOCK_SOURCE(cfg) \
+    C8724Q_CFG_FIELD_GET(cfg, 1, C8724Q_REG2_CKS_MASK, 7, c8724q_clock_source_t)
 
 /**
- * @brief      stage and get active GRID scan count
- * @param[in]  *handle pointer to a c8724q handle
- * @param[in]  value scan row selection
- * @return     setter: 0 success, 2 invalid handle, 3 not initialized, 4 invalid value
- * @note       getter returns pending state; call c8724q_apply_config to commit
+ * @brief      set and get the active GRID scan count in a configuration array
+ * @param[in]  cfg uint8_t[4] configuration array
+ * @param[in]  value c8724q_scan_t value
+ * @note       no range check; call c8724q_set_config to transmit
  */
-uint8_t c8724q_set_scan(c8724q_handle_t *handle, c8724q_scan_t value);
-uint8_t c8724q_get_scan(c8724q_handle_t *handle, c8724q_scan_t *value);
+#define C8724Q_SET_SCAN(cfg, value) \
+    C8724Q_CFG_FIELD_SET(cfg, 1, C8724Q_REG2_SCAN_MASK, 2, value)
+#define C8724Q_GET_SCAN(cfg) \
+    C8724Q_CFG_FIELD_GET(cfg, 1, C8724Q_REG2_SCAN_MASK, 2, c8724q_scan_t)
 
 /**
- * @brief      stage and get test mode
- * @param[in]  *handle pointer to a c8724q handle
- * @param[in]  value test mode enable
- * @return     setter: 0 success, 2 invalid handle, 3 not initialized, 4 invalid value
+ * @brief      set and get the test mode in a configuration array
+ * @param[in]  cfg uint8_t[4] configuration array
+ * @param[in]  value c8724q_bool_t value
  * @note       normal display operation requires test mode disabled
  */
-uint8_t c8724q_set_test_mode(c8724q_handle_t *handle, c8724q_bool_t value);
-uint8_t c8724q_get_test_mode(c8724q_handle_t *handle, c8724q_bool_t *value);
+#define C8724Q_SET_TEST_MODE(cfg, value) \
+    C8724Q_CFG_FIELD_SET(cfg, 1, C8724Q_REG2_WM_MASK, 1, value)
+#define C8724Q_GET_TEST_MODE(cfg) \
+    C8724Q_CFG_FIELD_GET(cfg, 1, C8724Q_REG2_WM_MASK, 1, c8724q_bool_t)
 
 /**
- * @brief      stage and get display update mode
- * @param[in]  *handle pointer to a c8724q handle
- * @param[in]  value display update mode
- * @return     setter: 0 success, 2 invalid handle, 3 not initialized, 4 invalid value
- * @note       getter returns pending state; call c8724q_apply_config to commit
+ * @brief      set and get the display update mode in a configuration array
+ * @param[in]  cfg uint8_t[4] configuration array
+ * @param[in]  value c8724q_update_mode_t value
+ * @note       no range check; call c8724q_set_config to transmit
  */
-uint8_t c8724q_set_update_mode(c8724q_handle_t *handle, c8724q_update_mode_t value);
-uint8_t c8724q_get_update_mode(c8724q_handle_t *handle, c8724q_update_mode_t *value);
+#define C8724Q_SET_UPDATE_MODE(cfg, value) \
+    C8724Q_CFG_FIELD_SET(cfg, 1, C8724Q_REG2_VSYN_M_MASK, 0, value)
+#define C8724Q_GET_UPDATE_MODE(cfg) \
+    C8724Q_CFG_FIELD_GET(cfg, 1, C8724Q_REG2_VSYN_M_MASK, 0, c8724q_update_mode_t)
 
 /**
- * @brief      stage and get OTP1 protection state
- * @param[in]  *handle pointer to a c8724q handle
- * @param[in]  value OTP1 protection state
- * @return     setter: 0 success, 2 invalid handle, 3 not initialized, 4 invalid value
- * @note       register bit value 0 enables protection and 1 disables it
+ * @brief      set and get the OTP1 125 degree protection in a configuration array
+ * @param[in]  cfg uint8_t[4] configuration array
+ * @param[in]  value C8724Q_BOOL_TRUE enables the protection, any other value disables it
+ * @note       the register bit is inverted: 0 enables and 1 disables the protection
  */
-uint8_t c8724q_set_otp1_protection(c8724q_handle_t *handle, c8724q_protection_t value);
-uint8_t c8724q_get_otp1_protection(c8724q_handle_t *handle, c8724q_protection_t *value);
+#define C8724Q_SET_OTP1_ENABLE(cfg, value) \
+    C8724Q_CFG_FIELD_SET(cfg, 2, C8724Q_REG3_OTP1_MASK, 7, \
+                         (((value) == C8724Q_BOOL_TRUE) ? 0U : 1U))
+#define C8724Q_GET_OTP1_ENABLE(cfg) \
+    ((c8724q_bool_t)(((((cfg)[2]) & C8724Q_REG3_OTP1_MASK) == 0U) ? \
+                     C8724Q_BOOL_TRUE : C8724Q_BOOL_FALSE))
 
 /**
- * @brief      stage and get the raw RCS bit
- * @param[in]  *handle pointer to a c8724q handle
- * @param[in]  value raw RCS bit, 0 or 1
- * @return     setter: 0 success, 2 invalid handle, 3 not initialized, 4 out of range
- * @note       datasheet documents RCS=0; behavior for RCS=1 is unspecified
+ * @brief      set and get the current setting resistor selection in a configuration array
+ * @param[in]  cfg uint8_t[4] configuration array
+ * @param[in]  value C8724Q_BOOL_TRUE selects the external resistor, C8724Q_BOOL_FALSE the internal one
+ * @note       the datasheet only documents the internal resistor setting (RCS = 0)
  */
-uint8_t c8724q_set_rcs_bit(c8724q_handle_t *handle, uint8_t value);
-uint8_t c8724q_get_rcs_bit(c8724q_handle_t *handle, uint8_t *value);
+#define C8724Q_SET_RCS_EXTERNAL(cfg, value) \
+    C8724Q_CFG_FIELD_SET(cfg, 2, C8724Q_REG3_RCS_MASK, 6, value)
+#define C8724Q_GET_RCS_EXTERNAL(cfg) \
+    C8724Q_CFG_FIELD_GET(cfg, 2, C8724Q_REG3_RCS_MASK, 6, c8724q_bool_t)
 
 /**
- * @brief      stage and get internal clock frequency
- * @param[in]  *handle pointer to a c8724q handle
- * @param[in]  value internal clock frequency
- * @return     setter: 0 success, 2 invalid handle, 3 not initialized, 4 invalid value
- * @note       getter returns pending state; call c8724q_apply_config to commit
+ * @brief      set and get the internal clock frequency in a configuration array
+ * @param[in]  cfg uint8_t[4] configuration array
+ * @param[in]  value c8724q_internal_clock_t value
+ * @note       no range check; call c8724q_set_config to transmit
  */
-uint8_t c8724q_set_internal_clock(c8724q_handle_t *handle, c8724q_internal_clock_t value);
-uint8_t c8724q_get_internal_clock(c8724q_handle_t *handle, c8724q_internal_clock_t *value);
+#define C8724Q_SET_INTERNAL_CLOCK(cfg, value) \
+    C8724Q_CFG_FIELD_SET(cfg, 2, C8724Q_REG3_RCKS_MASK, 4, value)
+#define C8724Q_GET_INTERNAL_CLOCK(cfg) \
+    C8724Q_CFG_FIELD_GET(cfg, 2, C8724Q_REG3_RCKS_MASK, 4, c8724q_internal_clock_t)
 
 /**
- * @brief      stage and get SEG output enable
- * @param[in]  *handle pointer to a c8724q handle
- * @param[in]  value SEG output enable
- * @return     setter: 0 success, 2 invalid handle, 3 not initialized, 4 invalid value
- * @note       getter returns pending state; call c8724q_apply_config to commit
+ * @brief      set and get the SEG output enable in a configuration array
+ * @param[in]  cfg uint8_t[4] configuration array
+ * @param[in]  value c8724q_bool_t value
+ * @note       no range check; call c8724q_set_config to transmit
  */
-uint8_t c8724q_set_output_enable(c8724q_handle_t *handle, c8724q_bool_t value);
-uint8_t c8724q_get_output_enable(c8724q_handle_t *handle, c8724q_bool_t *value);
+#define C8724Q_SET_OUTPUT_ENABLE(cfg, value) \
+    C8724Q_CFG_FIELD_SET(cfg, 2, C8724Q_REG3_OE_MASK, 3, value)
+#define C8724Q_GET_OUTPUT_ENABLE(cfg) \
+    C8724Q_CFG_FIELD_GET(cfg, 2, C8724Q_REG3_OE_MASK, 3, c8724q_bool_t)
 
 /**
- * @brief      stage and get ghost removal strength
- * @param[in]  *handle pointer to a c8724q handle
- * @param[in]  value ghost removal strength
- * @return     setter: 0 success, 2 invalid handle, 3 not initialized, 4 invalid value
- * @note       getter returns pending state; call c8724q_apply_config to commit
+ * @brief      set and get the ghost removal strength in a configuration array
+ * @param[in]  cfg uint8_t[4] configuration array
+ * @param[in]  value c8724q_ghost_removal_t value
+ * @note       no range check; call c8724q_set_config to transmit
  */
-uint8_t c8724q_set_ghost_removal(c8724q_handle_t *handle, c8724q_ghost_removal_t value);
-uint8_t c8724q_get_ghost_removal(c8724q_handle_t *handle, c8724q_ghost_removal_t *value);
+#define C8724Q_SET_GHOST_REMOVAL(cfg, value) \
+    C8724Q_CFG_FIELD_SET(cfg, 2, C8724Q_REG3_DGH_MASK, 2, value)
+#define C8724Q_GET_GHOST_REMOVAL(cfg) \
+    C8724Q_CFG_FIELD_GET(cfg, 2, C8724Q_REG3_DGH_MASK, 2, c8724q_ghost_removal_t)
 
 /**
- * @brief      stage and get line blanking time
- * @param[in]  *handle pointer to a c8724q handle
- * @param[in]  value line blanking time
- * @return     setter: 0 success, 2 invalid handle, 3 not initialized, 4 invalid value
- * @note       getter returns pending state; call c8724q_apply_config to commit
+ * @brief      set and get the line blanking time in a configuration array
+ * @param[in]  cfg uint8_t[4] configuration array
+ * @param[in]  value c8724q_line_blanking_t value
+ * @note       no range check; call c8724q_set_config to transmit
  */
-uint8_t c8724q_set_line_blanking(c8724q_handle_t *handle, c8724q_line_blanking_t value);
-uint8_t c8724q_get_line_blanking(c8724q_handle_t *handle, c8724q_line_blanking_t *value);
+#define C8724Q_SET_LINE_BLANKING(cfg, value) \
+    C8724Q_CFG_FIELD_SET(cfg, 2, C8724Q_REG3_TLS_MASK, 0, value)
+#define C8724Q_GET_LINE_BLANKING(cfg) \
+    C8724Q_CFG_FIELD_GET(cfg, 2, C8724Q_REG3_TLS_MASK, 0, c8724q_line_blanking_t)
 
 /**
- * @brief      stage and get sleep mode enable
- * @param[in]  *handle pointer to a c8724q handle
- * @param[in]  value sleep mode enable
- * @return     setter: 0 success, 2 invalid handle, 3 not initialized, 4 invalid value
- * @note       getter returns pending state; call c8724q_apply_config to commit
+ * @brief      set and get the sleep mode enable in a configuration array
+ * @param[in]  cfg uint8_t[4] configuration array
+ * @param[in]  value c8724q_bool_t value
+ * @note       the sleep instruction requires this field enabled
  */
-uint8_t c8724q_set_sleep_enable(c8724q_handle_t *handle, c8724q_bool_t value);
-uint8_t c8724q_get_sleep_enable(c8724q_handle_t *handle, c8724q_bool_t *value);
+#define C8724Q_SET_SLEEP_ENABLE(cfg, value) \
+    C8724Q_CFG_FIELD_SET(cfg, 3, C8724Q_REG4_SLEEP_EN_MASK, 6, value)
+#define C8724Q_GET_SLEEP_ENABLE(cfg) \
+    C8724Q_CFG_FIELD_GET(cfg, 3, C8724Q_REG4_SLEEP_EN_MASK, 6, c8724q_bool_t)
 
 /**
- * @brief      stage and get automatic sleep enable
- * @param[in]  *handle pointer to a c8724q handle
- * @param[in]  value automatic sleep enable
- * @return     setter: 0 success, 2 invalid handle, 3 not initialized, 4 invalid value
- * @note       getter returns pending state; call c8724q_apply_config to commit
+ * @brief      set and get the automatic sleep enable in a configuration array
+ * @param[in]  cfg uint8_t[4] configuration array
+ * @param[in]  value c8724q_bool_t value
+ * @note       no range check; call c8724q_set_config to transmit
  */
-uint8_t c8724q_set_auto_sleep_enable(c8724q_handle_t *handle, c8724q_bool_t value);
-uint8_t c8724q_get_auto_sleep_enable(c8724q_handle_t *handle, c8724q_bool_t *value);
+#define C8724Q_SET_AUTO_SLEEP_ENABLE(cfg, value) \
+    C8724Q_CFG_FIELD_SET(cfg, 3, C8724Q_REG4_SLEEP_AT_MASK, 5, value)
+#define C8724Q_GET_AUTO_SLEEP_ENABLE(cfg) \
+    C8724Q_CFG_FIELD_GET(cfg, 3, C8724Q_REG4_SLEEP_AT_MASK, 5, c8724q_bool_t)
 
 /**
- * @brief      stage and get global reset enable
- * @param[in]  *handle pointer to a c8724q handle
- * @param[in]  value global reset enable
- * @return     setter: 0 success, 2 invalid handle, 3 not initialized, 4 invalid value
- * @note       getter returns pending state; call c8724q_apply_config to commit
+ * @brief      set and get the global reset enable in a configuration array
+ * @param[in]  cfg uint8_t[4] configuration array
+ * @param[in]  value c8724q_bool_t value
+ * @note       no range check; call c8724q_set_config to transmit
  */
-uint8_t c8724q_set_global_reset_enable(c8724q_handle_t *handle, c8724q_bool_t value);
-uint8_t c8724q_get_global_reset_enable(c8724q_handle_t *handle, c8724q_bool_t *value);
+#define C8724Q_SET_GLOBAL_RESET_ENABLE(cfg, value) \
+    C8724Q_CFG_FIELD_SET(cfg, 3, C8724Q_REG4_GRST_MASK, 4, value)
+#define C8724Q_GET_GLOBAL_RESET_ENABLE(cfg) \
+    C8724Q_CFG_FIELD_GET(cfg, 3, C8724Q_REG4_GRST_MASK, 4, c8724q_bool_t)
 
 /**
- * @brief      stage and get soft reset enable
- * @param[in]  *handle pointer to a c8724q handle
- * @param[in]  value soft reset enable
- * @return     setter: 0 success, 2 invalid handle, 3 not initialized, 4 invalid value
- * @note       getter returns pending state; call c8724q_apply_config to commit
+ * @brief      set and get the soft reset enable in a configuration array
+ * @param[in]  cfg uint8_t[4] configuration array
+ * @param[in]  value c8724q_bool_t value
+ * @note       no range check; call c8724q_set_config to transmit
  */
-uint8_t c8724q_set_soft_reset_enable(c8724q_handle_t *handle, c8724q_bool_t value);
-uint8_t c8724q_get_soft_reset_enable(c8724q_handle_t *handle, c8724q_bool_t *value);
+#define C8724Q_SET_SOFT_RESET_ENABLE(cfg, value) \
+    C8724Q_CFG_FIELD_SET(cfg, 3, C8724Q_REG4_SRST_MASK, 3, value)
+#define C8724Q_GET_SOFT_RESET_ENABLE(cfg) \
+    C8724Q_CFG_FIELD_GET(cfg, 3, C8724Q_REG4_SRST_MASK, 3, c8724q_bool_t)
 
 /**
- * @brief      stage and get scan clock doubling
- * @param[in]  *handle pointer to a c8724q handle
- * @param[in]  value scan clock doubling enable
- * @return     setter: 0 success, 2 invalid handle, 3 not initialized, 4 invalid value
- * @note       getter returns pending state; call c8724q_apply_config to commit
+ * @brief      set and get the scan clock doubling in a configuration array
+ * @param[in]  cfg uint8_t[4] configuration array
+ * @param[in]  value c8724q_bool_t value
+ * @note       no range check; call c8724q_set_config to transmit
  */
-uint8_t c8724q_set_scan_clock_double_enable(c8724q_handle_t *handle, c8724q_bool_t value);
-uint8_t c8724q_get_scan_clock_double_enable(c8724q_handle_t *handle, c8724q_bool_t *value);
+#define C8724Q_SET_SCAN_CLOCK_DOUBLE(cfg, value) \
+    C8724Q_CFG_FIELD_SET(cfg, 3, C8724Q_REG4_CLK2X_MASK, 2, value)
+#define C8724Q_GET_SCAN_CLOCK_DOUBLE(cfg) \
+    C8724Q_CFG_FIELD_GET(cfg, 3, C8724Q_REG4_CLK2X_MASK, 2, c8724q_bool_t)
 
 /**
- * @brief      stage and get OTP2 protection state
- * @param[in]  *handle pointer to a c8724q handle
- * @param[in]  value OTP2 protection state
- * @return     setter: 0 success, 2 invalid handle, 3 not initialized, 4 invalid value
- * @note       register bit value 0 enables protection and 1 disables it
+ * @brief      set and get the OTP2 150 degree protection in a configuration array
+ * @param[in]  cfg uint8_t[4] configuration array
+ * @param[in]  value C8724Q_BOOL_TRUE enables the protection, any other value disables it
+ * @note       the register bit is inverted: 0 enables and 1 disables the protection
  */
-uint8_t c8724q_set_otp2_protection(c8724q_handle_t *handle, c8724q_protection_t value);
-uint8_t c8724q_get_otp2_protection(c8724q_handle_t *handle, c8724q_protection_t *value);
+#define C8724Q_SET_OTP2_ENABLE(cfg, value) \
+    C8724Q_CFG_FIELD_SET(cfg, 3, C8724Q_REG4_OTP2_MASK, 1, \
+                         (((value) == C8724Q_BOOL_TRUE) ? 0U : 1U))
+#define C8724Q_GET_OTP2_ENABLE(cfg) \
+    ((c8724q_bool_t)(((((cfg)[3]) & C8724Q_REG4_OTP2_MASK) == 0U) ? \
+                     C8724Q_BOOL_TRUE : C8724Q_BOOL_FALSE))
 
 /**
- * @brief      stage and get power-down reset enable
- * @param[in]  *handle pointer to a c8724q handle
- * @param[in]  value power-down reset enable
- * @return     setter: 0 success, 2 invalid handle, 3 not initialized, 4 invalid value
- * @note       getter returns pending state; call c8724q_apply_config to commit
+ * @brief      set and get the power-down reset enable in a configuration array
+ * @param[in]  cfg uint8_t[4] configuration array
+ * @param[in]  value c8724q_bool_t value
+ * @note       no range check; call c8724q_set_config to transmit
  */
-uint8_t c8724q_set_power_down_reset_enable(c8724q_handle_t *handle, c8724q_bool_t value);
-uint8_t c8724q_get_power_down_reset_enable(c8724q_handle_t *handle, c8724q_bool_t *value);
+#define C8724Q_SET_POWER_DOWN_RESET(cfg, value) \
+    C8724Q_CFG_FIELD_SET(cfg, 3, C8724Q_REG4_PDR_MASK, 0, value)
+#define C8724Q_GET_POWER_DOWN_RESET(cfg) \
+    C8724Q_CFG_FIELD_GET(cfg, 3, C8724Q_REG4_PDR_MASK, 0, c8724q_bool_t)
 
 /** @} */
 
@@ -714,14 +638,69 @@ uint8_t c8724q_write_display_address(c8724q_handle_t *handle, const uint8_t *add
 uint8_t c8724q_display_update(c8724q_handle_t *handle);
 
 /**
- * @brief      clear the active display frame
+ * @brief      set one PWM value in the frame buffer
+ * @param[in]  *handle pointer to a c8724q handle
+ * @param[in]  grid GRID index, 0 through 7
+ * @param[in]  segment SEG index, 0 through 11
+ * @param[in]  pwm PWM value from 0 through 255
+ * @return     status code
+ *             - 0 success
+ *             - 2 handle is invalid
+ *             - 3 chip is not initialized
+ *             - 4 grid or segment is out of range
+ * @note       modifies the frame buffer only; call c8724q_display_flush to show it
+ */
+uint8_t c8724q_display_set_pixel(c8724q_handle_t *handle, uint8_t grid, uint8_t segment, uint8_t pwm);
+
+/**
+ * @brief      get one PWM value from the frame buffer
+ * @param[in]  *handle pointer to a c8724q handle
+ * @param[in]  grid GRID index, 0 through 7
+ * @param[in]  segment SEG index, 0 through 11
+ * @param[out] *pwm pointer to the PWM value output
+ * @return     status code
+ *             - 0 success
+ *             - 2 handle is invalid
+ *             - 3 chip is not initialized
+ *             - 4 grid, segment or pointer is invalid
+ * @note       none
+ */
+uint8_t c8724q_display_get_pixel(c8724q_handle_t *handle, uint8_t grid, uint8_t segment, uint8_t *pwm);
+
+/**
+ * @brief      fill the whole frame buffer with one PWM value
+ * @param[in]  *handle pointer to a c8724q handle
+ * @param[in]  pwm PWM value from 0 through 255
+ * @return     status code
+ *             - 0 success
+ *             - 2 handle is invalid
+ *             - 3 chip is not initialized
+ * @note       modifies the frame buffer only; call c8724q_display_flush to show it
+ */
+uint8_t c8724q_display_fill(c8724q_handle_t *handle, uint8_t pwm);
+
+/**
+ * @brief      send the frame buffer to the chip and switch to it
  * @param[in]  *handle pointer to a c8724q handle
  * @return     status code
  *             - 0 success
  *             - 1 SPI operation failed
  *             - 2 handle is invalid
  *             - 3 chip is not initialized
- * @note       writes zero PWM data and issues a display update
+ * @note       sends the rows enabled by SCAN in one sequential write and then
+ *             issues the display update instruction
+ */
+uint8_t c8724q_display_flush(c8724q_handle_t *handle);
+
+/**
+ * @brief      clear the frame buffer and the active display frame
+ * @param[in]  *handle pointer to a c8724q handle
+ * @return     status code
+ *             - 0 success
+ *             - 1 SPI operation failed
+ *             - 2 handle is invalid
+ *             - 3 chip is not initialized
+ * @note       fills the frame buffer with zero PWM data and flushes it
  */
 uint8_t c8724q_display_clear(c8724q_handle_t *handle);
 
@@ -745,7 +724,8 @@ uint8_t c8724q_soft_reset(c8724q_handle_t *handle);
  *             - 1 SPI operation failed
  *             - 2 handle is invalid
  *             - 3 chip is not initialized
- * @note       resets the configuration registers and disables outputs
+ * @note       resets the configuration registers, disables outputs and reloads
+ *             the datasheet reset defaults into the shadow configuration
  */
 uint8_t c8724q_global_reset(c8724q_handle_t *handle);
 

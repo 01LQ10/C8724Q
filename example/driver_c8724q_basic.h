@@ -4,7 +4,7 @@
  *
  * @file      driver_c8724q_basic.h
  * @brief     driver c8724q basic example header file
- * @version   1.0.0
+ * @version   1.1.0
  * @author    LQ
  * @date      2026-10-05
  *
@@ -12,6 +12,7 @@
  * <table>
  * <tr><th>Date        <th>Version  <th>Author  <th>Description
  * <tr><td>2026/10/05  <td>1.0.0    <td>LQ      <td>first upload
+ * <tr><td>2026/10/05  <td>1.1.0    <td>LQ      <td>config flow moved to field macros and one set_config
  * </table>
  */
 

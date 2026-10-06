@@ -4,7 +4,7 @@
  *
  * @file      driver_c8724q_basic.c
  * @brief     driver c8724q basic example source file
- * @version   1.0.0
+ * @version   1.1.0
  * @author    LQ
  * @date      2026-10-05
  *
@@ -12,6 +12,7 @@
  * <table>
  * <tr><th>Date        <th>Version  <th>Author  <th>Description
  * <tr><td>2026/10/05  <td>1.0.0    <td>LQ      <td>first upload
+ * <tr><td>2026/10/05  <td>1.1.0    <td>LQ      <td>config flow moved to field macros and one set_config
  * </table>
  */
 
@@ -30,6 +31,7 @@ static c8724q_handle_t gs_handle;
  */
 uint8_t c8724q_basic_init(void)
 {
+    uint8_t config[4];
     uint8_t res;
 
     /* link functions */
@@ -47,31 +49,20 @@ uint8_t c8724q_basic_init(void)
         return 1U;
     }
 
-    /* stage a low-current 8 by 12 display configuration */
-    res = c8724q_set_seg11_mode(&gs_handle, C8724Q_BASIC_DEFAULT_SEG11_MODE);
+    /* modify a copy of the reset configuration through the field macros */
+    res = c8724q_get_config(&gs_handle, config);
     if (res == 0U)
     {
-        res = c8724q_set_seg12_mode(&gs_handle, C8724Q_BASIC_DEFAULT_SEG12_MODE);
-    }
-    if (res == 0U)
-    {
-        res = c8724q_set_global_current_gain(&gs_handle, C8724Q_BASIC_DEFAULT_GCC);
-    }
-    if (res == 0U)
-    {
-        res = c8724q_set_scan(&gs_handle, C8724Q_BASIC_DEFAULT_SCAN);
-    }
-    if (res == 0U)
-    {
-        res = c8724q_set_output_enable(&gs_handle, C8724Q_BASIC_DEFAULT_OUTPUT);
-    }
-    if (res == 0U)
-    {
-        res = c8724q_apply_config(&gs_handle);
+        C8724Q_SET_SEG11_MODE(config, C8724Q_BASIC_DEFAULT_SEG11_MODE);
+        C8724Q_SET_SEG12_MODE(config, C8724Q_BASIC_DEFAULT_SEG12_MODE);
+        C8724Q_SET_GLOBAL_CURRENT_GAIN(config, C8724Q_BASIC_DEFAULT_GCC);
+        C8724Q_SET_SCAN(config, C8724Q_BASIC_DEFAULT_SCAN);
+        C8724Q_SET_OUTPUT_ENABLE(config, C8724Q_BASIC_DEFAULT_OUTPUT);
+        res = c8724q_set_config(&gs_handle, config);
     }
     if (res != 0U)
     {
-        c8724q_interface_debug_print("c8724q: stage or apply configuration failed.\n");
+        c8724q_interface_debug_print("c8724q: configure failed.\n");
         (void)c8724q_deinit(&gs_handle);
         return 1U;
     }

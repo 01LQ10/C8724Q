@@ -15,16 +15,24 @@
 - `interface/driver_c8724q_interface.h`：SPI 初始化、SPI 字节流写和调试打印接口。
 - `interface/driver_c8724q_interface_template.c`：可编译桩实现；返回成功仅为编译占位，不会实际访问硬件。
 - `example/driver_c8724q_basic.c`：8×12、GRID-major 缓冲示例。默认 SEG 输出电流档为 GCC=0（数据手册给出的最小档位），硬件设计及 LED 额定值仍需由使用者确认。
-- `test/driver_c8724q_display_test.c`：真机显示测试，覆盖配置暂存/应用、长度校验、顺序写入、按地址写入和帧更新。
-- `test/driver_c8724q_config_test.c`：mock SPI 配置测试，校验暂存不触发总线写入、完整配置包及校验和、非法值拒绝和写入失败重试。
+- `test/driver_c8724q_display_test.c`：真机显示测试，覆盖配置宏、帧缓冲绘制与 flush、长度校验、按地址写入和帧更新。
+- `test/driver_c8724q_config_test.c`：mock SPI 配置测试，校验字段宏不改影子不动总线、完整配置包及校验和、保留位拒绝、写入失败时影子保持与重试。
 
 ## 配置 API
 
-使用 `c8724q_set_<feature>()` / `c8724q_get_<feature>()` 逐项修改和读取**待应用配置**。Setter 只改软件暂存值，不执行 SPI 传输；多个字段可先组合设置，再调用一次 `c8724q_apply_config()`，将四个寄存器与数据校验和作为单个配置事务发送。若 SPI 写失败，待应用值保留，最近一次成功应用的快照不变，可修复总线后重试 apply。
+配置以四字节数组为单位传输，流程固定为三步：
 
-`c8724q_get_config()` 返回待应用四字节快照；`c8724q_get_applied_config()` 返回最近成功应用的四字节软件快照。芯片没有配置寄存器读回指令，因此两者都不是硬件读回值。旧的 `c8724q_set_config()` 和 `c8724q_set_config_reg1..4()` 也改为只暂存；调用方必须显式调用 apply。
+1. `c8724q_get_config(handle, config)`：把句柄内的当前配置拷贝到外部数组；
+2. 用 `C8724Q_SET_xxx(config, value)` 系列宏在外部数组上修改字段，`C8724Q_GET_xxx(config)` 读回字段；宏对目标字节做**读-改-写**（先清字段位再填新值），不触碰其他字段，也不做值域检查——合法值域由调用方保证（各枚举见 `driver_c8724q.h`）；
+3. `c8724q_set_config(handle, config)`：把四个寄存器与数据校验和作为**单个事务**发给芯片，成功后同步更新句柄内的影子配置。
 
-具名接口覆盖 SEG11/12 引脚功能、GCC、电源时钟源、SCAN、测试模式、更新模式、OTP1/2、RCKS、SEG 输出使能、鬼影消除、TLS、休眠/自动休眠、全局/软复位使能、CLK2X 与 PDR。寄存器 2 bit 6:5 和寄存器 4 bit 7 按数据手册保留并拒绝置位。寄存器 3 的 RCS=0 被描述为内部设置电阻；RCS=1 的行为没有明确说明，`c8724q_set_rcs_bit()` 仅提供原始位控制，不额外解释语义。`c8724q_set_config_reg3()` 是保留未知位行为的低层暂存入口。
+芯片没有配置寄存器读回指令，`c8724q_get_config()` 返回的是驱动维护的影子值；由于每次 `c8724q_set_config()` 都真实下发，影子值即最近一次成功应用的配置。SPI 写失败时返回错误码 1，影子保持不变，修复总线后重发即可。
+
+字段宏覆盖 SEG11/12 引脚功能、GCC、时钟源、SCAN、测试模式、更新模式、OTP1/2、RCS、RCKS、SEG 输出使能、鬼影消除、TLS、休眠/自动休眠、全局/软复位使能、CLK2X 与 PDR。极性说明：`C8724Q_SET_OTP1_ENABLE(cfg, C8724Q_BOOL_TRUE)` 表示打开 125°C 降流保护（寄存器位写 0），`C8724Q_SET_RCS_EXTERNAL()` 为 TRUE 时选择外部电流设置电阻（数据手册仅明确 RCS=0 内部电阻的行为）。寄存器 2 bit 6:5 与寄存器 4 bit 7 为保留位，`c8724q_set_config()` 拒绝置位并返回错误码 4。
+
+## 帧缓冲 API
+
+驱动在句柄内维护 8×12（GRID-major）PWM 帧缓冲：`c8724q_display_set_pixel / get_pixel / fill` 只修改缓冲，`c8724q_display_flush` 按 SCAN 行数把缓冲经顺序写发送并自动调用 `c8724q_display_update` 切帧，`c8724q_display_clear` 等价于 fill(0) + flush。需要局部刷新或精确控制切帧时序时，仍可直接使用 `c8724q_write_display`、`c8724q_write_display_address` 与 `c8724q_display_update`。
 
 顺序显示数据长度必须与 SCAN 配置的 GRID 数量相符，顺序为 GRID1 的 SEG1～SEG12，然后 GRID2，依次类推。按地址写入使用 SRAM 地址 `(GRID 索引 << 4) | SEG 索引`，索引从 0 开始，每次最多 72 项。两种显示写入均须随后调用 `c8724q_display_update` 才切换至新帧。
 

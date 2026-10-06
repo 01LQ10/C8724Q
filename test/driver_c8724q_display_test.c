@@ -4,7 +4,7 @@
  *
  * @file      driver_c8724q_display_test.c
  * @brief     driver c8724q display test source file
- * @version   1.0.0
+ * @version   1.1.0
  * @author    LQ
  * @date      2026-10-05
  *
@@ -12,6 +12,7 @@
  * <table>
  * <tr><th>Date        <th>Version  <th>Author  <th>Description
  * <tr><td>2026/10/05  <td>1.0.0    <td>LQ      <td>first upload
+ * <tr><td>2026/10/05  <td>1.1.0    <td>LQ      <td>config flow moved to field macros, frame buffer test added
  * </table>
  */
 
@@ -26,7 +27,7 @@ static c8724q_handle_t gs_handle; /**< c8724q test handle */
  */
 
 /**
- * @brief      test display data writing and frame update
+ * @brief      test the frame buffer, sequential write, addressed write and update
  * @param[in]  address instruction chip select address
  * @param[in]  times number of display pattern iterations
  * @return     status code
@@ -37,13 +38,13 @@ static c8724q_handle_t gs_handle; /**< c8724q test handle */
 uint8_t c8724q_display_test(c8724q_address_t address, uint32_t times)
 {
     c8724q_info_t info;
-    uint8_t readback[4];
-    uint8_t applied[4];
-    uint8_t frame[C8724Q_DISPLAY_DATA_MAX];
+    uint8_t config[4];
     uint8_t pixel_address[4] = { 0x00U, 0x0BU, 0x70U, 0x7BU };
     uint8_t pixel_data[4] = { 0x20U, 0x00U, 0x00U, 0x20U };
+    uint8_t pwm;
     uint8_t res;
-    uint16_t i;
+    uint8_t grid;
+    uint8_t segment;
     uint32_t j;
 
     if (times == 0U)
@@ -85,9 +86,9 @@ uint8_t c8724q_display_test(c8724q_address_t address, uint32_t times)
         c8724q_interface_debug_print("c8724q: display test init failed.\n");
         return 1U;
     }
-    res = c8724q_get_config(&gs_handle, readback);
-    if ((res != 0U) || (readback[0] != 0x3FU) || (readback[1] != 0x00U) ||
-        (readback[2] != 0xF0U) || (readback[3] != 0x02U))
+    if ((c8724q_get_config(&gs_handle, config) != 0U) ||
+        (config[0] != 0x3FU) || (config[1] != 0x00U) ||
+        (config[2] != 0xF0U) || (config[3] != 0x02U))
     {
         c8724q_interface_debug_print("c8724q: verify reset configuration failed.\n");
         (void)c8724q_deinit(&gs_handle);
@@ -105,73 +106,47 @@ uint8_t c8724q_display_test(c8724q_address_t address, uint32_t times)
         return 1U;
     }
 
-    /* stage the LED matrix configuration at minimum SEG current */
-    res = c8724q_set_seg11_mode(&gs_handle, C8724Q_SEG_PIN_LED_OUTPUT);
-    if (res == 0U)
+    /* configure the LED matrix through field macros and one set_config call */
+    C8724Q_SET_SEG11_MODE(config, C8724Q_SEG_PIN_LED_OUTPUT);
+    C8724Q_SET_SEG12_MODE(config, C8724Q_SEG_PIN_LED_OUTPUT);
+    C8724Q_SET_GLOBAL_CURRENT_GAIN(config, 0U);
+    C8724Q_SET_SCAN(config, C8724Q_SCAN_8_ROWS);
+    C8724Q_SET_OUTPUT_ENABLE(config, C8724Q_BOOL_TRUE);
+    res = c8724q_set_config(&gs_handle, config);
+    if ((res == 0U) &&
+        ((c8724q_get_config(&gs_handle, config) != 0U) ||
+         (config[0] != 0xC0U) || (config[1] != 0x1CU) ||
+         (config[2] != 0xF8U) || (config[3] != 0x02U)))
     {
-        res = c8724q_set_seg12_mode(&gs_handle, C8724Q_SEG_PIN_LED_OUTPUT);
+        res = 1U;
     }
-    if (res == 0U)
+    if (res != 0U)
     {
-        res = c8724q_set_global_current_gain(&gs_handle, 0U);
-    }
-    if (res == 0U)
-    {
-        res = c8724q_set_scan(&gs_handle, C8724Q_SCAN_8_ROWS);
-    }
-    if (res == 0U)
-    {
-        res = c8724q_set_output_enable(&gs_handle, C8724Q_BOOL_TRUE);
-    }
-    if (res == 0U)
-    {
-        res = c8724q_get_config(&gs_handle, readback);
-    }
-    if ((res != 0U) || (readback[0] != 0xC0U) || (readback[1] != 0x1CU) ||
-        (readback[2] != 0xF8U) || (readback[3] != 0x02U))
-    {
-        c8724q_interface_debug_print("c8724q: stage or verify configuration failed.\n");
+        c8724q_interface_debug_print("c8724q: configure failed.\n");
         (void)c8724q_deinit(&gs_handle);
         return 1U;
     }
-    res = c8724q_get_applied_config(&gs_handle, applied);
-    if ((res != 0U) || (applied[0] != 0x3FU) || (applied[1] != 0x00U) ||
-        (applied[2] != 0xF0U) || (applied[3] != 0x02U))
-    {
-        c8724q_interface_debug_print("c8724q: verify unapplied configuration failed.\n");
-        (void)c8724q_deinit(&gs_handle);
-        return 1U;
-    }
-    res = c8724q_apply_config(&gs_handle);
-    if (res == 0U)
-    {
-        res = c8724q_get_applied_config(&gs_handle, applied);
-    }
-    if ((res != 0U) || (applied[0] != 0xC0U) || (applied[1] != 0x1CU) ||
-        (applied[2] != 0xF8U) || (applied[3] != 0x02U))
-    {
-        c8724q_interface_debug_print("c8724q: apply configuration failed.\n");
-        (void)c8724q_deinit(&gs_handle);
-        return 1U;
-    }
-    res = c8724q_set_scan(&gs_handle, (c8724q_scan_t)8U);
-    if (res != 4U)
-    {
-        c8724q_interface_debug_print("c8724q: invalid scan value check failed.\n");
-        (void)c8724q_deinit(&gs_handle);
-        return 1U;
-    }
-    res = c8724q_set_config_reg2(&gs_handle, 0x20U);
-    if (res != 4U)
+
+    /* reserved bits must still be rejected by set_config */
+    config[1] = 0x20U;
+    if (c8724q_set_config(&gs_handle, config) != 4U)
     {
         c8724q_interface_debug_print("c8724q: reserved configuration bit check failed.\n");
         (void)c8724q_deinit(&gs_handle);
         return 1U;
     }
 
+    /* out-of-range pixels are rejected by the frame buffer */
+    if ((c8724q_display_set_pixel(&gs_handle, C8724Q_DISPLAY_HEIGHT, 0U, 0U) != 4U) ||
+        (c8724q_display_set_pixel(&gs_handle, 0U, C8724Q_DISPLAY_WIDTH, 0U) != 4U))
+    {
+        c8724q_interface_debug_print("c8724q: frame buffer range check failed.\n");
+        (void)c8724q_deinit(&gs_handle);
+        return 1U;
+    }
+
     /* check sequential display input length validation */
-    res = c8724q_write_display(&gs_handle, frame, (uint16_t)(C8724Q_DISPLAY_DATA_MAX - 1U));
-    if (res != 4U)
+    if (c8724q_write_display(&gs_handle, config, (uint16_t)(C8724Q_DISPLAY_DATA_MAX - 1U)) != 4U)
     {
         c8724q_interface_debug_print("c8724q: sequential display length check failed.\n");
         (void)c8724q_deinit(&gs_handle);
@@ -180,19 +155,32 @@ uint8_t c8724q_display_test(c8724q_address_t address, uint32_t times)
 
     for (j = 0U; j < times; j++)
     {
-        /* create a low-brightness GRID-major pattern */
-        for (i = 0U; i < C8724Q_DISPLAY_DATA_MAX; i++)
+        /* fill the frame buffer with a low-brightness GRID-major gradient */
+        res = c8724q_display_fill(&gs_handle, (uint8_t)(j & 0x1FU));
+        for (grid = 0U; (grid < C8724Q_DISPLAY_HEIGHT) && (res == 0U); grid++)
         {
-            frame[i] = (uint8_t)((i + j) & 0x1FU);
+            for (segment = 0U; (segment < C8724Q_DISPLAY_WIDTH) && (res == 0U); segment++)
+            {
+                res = c8724q_display_set_pixel(&gs_handle, grid, segment,
+                                               (uint8_t)(((grid * C8724Q_DISPLAY_WIDTH) +
+                                                          segment + j) & 0x1FU));
+            }
         }
-        res = c8724q_write_display(&gs_handle, frame, C8724Q_DISPLAY_DATA_MAX);
         if (res == 0U)
         {
-            res = c8724q_display_update(&gs_handle);
+            res = c8724q_display_get_pixel(&gs_handle, 1U, 1U, &pwm);
+            if ((res == 0U) && (pwm != (uint8_t)((C8724Q_DISPLAY_WIDTH + 1U + j) & 0x1FU)))
+            {
+                res = 1U;
+            }
+        }
+        if (res == 0U)
+        {
+            res = c8724q_display_flush(&gs_handle);
         }
         if (res != 0U)
         {
-            c8724q_interface_debug_print("c8724q: sequential display test failed.\n");
+            c8724q_interface_debug_print("c8724q: frame buffer test failed.\n");
             (void)c8724q_deinit(&gs_handle);
             return 1U;
         }
