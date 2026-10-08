@@ -2,8 +2,8 @@
  * Copyright (c) 2026 LQ
  * SPDX-License-Identifier: MIT
  *
- * @file      driver_c8724q_display_test.h
- * @brief     driver c8724q display test header file
+ * @file      driver_c8724_display_test.h
+ * @brief     driver c8724 display test header file
  * @version   1.1.0
  * @author    LQ
  * @date      2026-10-05
@@ -16,17 +16,17 @@
  * </table>
  */
 
-#ifndef DRIVER_C8724Q_DISPLAY_TEST_H
-#define DRIVER_C8724Q_DISPLAY_TEST_H
+#ifndef DRIVER_C8724_DISPLAY_TEST_H
+#define DRIVER_C8724_DISPLAY_TEST_H
 
-#include "driver_c8724q.h"
+#include "driver_c8724.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /**
- * @addtogroup c8724q_test_driver
+ * @addtogroup c8724_test_driver
  * @{
  */
 
@@ -39,7 +39,7 @@ extern "C" {
  *             - 1 test failed
  * @note       requires a physical C8724 and platform SPI interface implementation
  */
-uint8_t c8724q_display_test(c8724q_address_t address, uint32_t times);
+uint8_t c8724_display_test(c8724_address_t address, uint32_t times);
 
 /** @} */
 
